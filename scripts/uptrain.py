@@ -14,7 +14,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "upstream/radiohead/code/lab")]
 
 from eval_retrieval import make_prompt
 from layers import solve_mu
-from radiohead.adaptation import attach_adapters
+from radiohead.adaptation import attach_adapters, restore_adapters
 from radiohead.attention import RadioAttention
 
 
@@ -22,7 +22,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--text", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--distilled", type=Path)
+    start = parser.add_mutually_exclusive_group()
+    start.add_argument("--distilled", type=Path)
+    start.add_argument("--resume", type=Path, help="Warm-start from an adapted checkpoint")
+    parser.add_argument("--seed", type=int, default=100_000)
     parser.add_argument("--model", default="Qwen/Qwen2.5-1.5B-Instruct")
     parser.add_argument("--revision", default="989aa7980e4cf806f80c7fef2b1adb7bc71aa306")
     parser.add_argument("--device", default="mps")
@@ -36,7 +39,7 @@ def main():
     if args.length < 1024 or min(args.rank, args.steps, args.retrieval_every) < 1:
         parser.error("Requires length >= 1024 and positive rank, steps, and retrieval interval")
     torch.manual_seed(0)
-    rng = random.Random(100_000)
+    rng = random.Random(args.seed)
     tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.revision)
     text = tokenizer.encode(args.text.read_text(encoding="utf-8"), add_special_tokens=False)
     if len(text) < args.length:
@@ -47,10 +50,12 @@ def main():
     ).to(args.device).train().requires_grad_(False)
     checkpoint = {"model": args.model, "revision": args.revision, "rank": args.rank}
     radio = None
-    if args.distilled:
-        checkpoint.update(torch.load(args.distilled, map_location="cpu", weights_only=True))
+    initial = args.resume or args.distilled
+    if initial:
+        checkpoint.update(torch.load(initial, map_location="cpu", weights_only=True))
         if (checkpoint["model"], checkpoint["revision"]) != (args.model, args.revision):
-            parser.error("Distilled checkpoint must match the model and revision")
+            parser.error("Starting checkpoint must match the model and revision")
+    if "layer" in checkpoint:
         layer = model.model.layers[checkpoint["layer"]]
         radio = RadioAttention(layer.self_attn, solve_mu, training_length=checkpoint["training_length"])
         radio.load_state_dict(checkpoint["state_dict"])
@@ -60,7 +65,17 @@ def main():
         for projection in (radio.q_proj, radio.v_proj, radio.o_proj):
             projection.requires_grad_(False)
         layer.self_attn = radio
-    adapters = attach_adapters(model, args.rank, range(max(0, len(model.model.layers) - 4), len(model.model.layers)))
+    if args.resume:
+        if checkpoint.get("rank") != args.rank or "adapters" not in checkpoint:
+            parser.error("Resume checkpoint must have adapters of the specified rank")
+        restore_adapters(model, checkpoint)
+        adapters = {
+            index: model.model.layers[int(index)].mlp.down_proj for index in checkpoint["adapters"]
+        }
+    else:
+        adapters = attach_adapters(
+            model, args.rank, range(max(0, len(model.model.layers) - 4), len(model.model.layers))
+        )
     optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=1e-4)
     for step in range(args.steps):
         if step % args.retrieval_every == 0:
