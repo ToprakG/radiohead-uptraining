@@ -1,0 +1,2 @@
+-r upstream/radiohead/requirements.txt
+transformers==4.51.3

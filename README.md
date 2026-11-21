@@ -9,7 +9,7 @@ The experimental target is 90% exact-match retrieval on held-out 16K prompts wit
 ```sh
 git submodule update --init
 uv venv --python 3.12
-uv pip install -r upstream/radiohead/requirements.txt
+uv pip install -r requirements.txt
 scripts/reproduce.sh test
 scripts/reproduce.sh recall
 ```
@@ -24,3 +24,17 @@ The recall command runs a one-seed comparison using the authors' quickstart sett
 4. Evaluate short-only adaptation first. If needed, train a separate checkpoint with a length curriculum and report it separately.
 
 [Original preprint](https://arxiv.org/abs/2611.13146) · [Authors' implementation](https://github.com/mystic-blue/radiohead)
+
+## Check the port and establish the stock baseline
+
+```sh
+.venv/bin/python scripts/check_port.py
+mkdir -p runs
+.venv/bin/python scripts/eval_retrieval.py \
+  --revision 989aa7980e4cf806f80c7fef2b1adb7bc71aa306 \
+  > runs/qwen-stock-16k.jsonl
+```
+
+The initial evaluation uses 15 competing records and deterministic synthetic filler.
+Keep its prompt seeds out of adaptation and add varied held-out background text
+before drawing broader conclusions.
