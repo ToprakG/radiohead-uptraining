@@ -1,5 +1,6 @@
 """Verify the Vast.ai API key with a read-only account request."""
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -31,7 +32,14 @@ def main():
         with urlopen(request, timeout=15):
             print("Vast.ai authentication verified.")
     except HTTPError as error:
-        print(f"Vast.ai account check returned HTTP {error.code}.", file=sys.stderr)
+        try:
+            details = json.loads(error.read(4096))
+        except ValueError:
+            details = {}
+        if isinstance(details, dict) and details.get("msg") == "Invalid user key":
+            print("Vast.ai rejected VAST_API_KEY as invalid.", file=sys.stderr)
+        else:
+            print(f"Vast.ai account check returned HTTP {error.code}.", file=sys.stderr)
         return 1
     except (URLError, TimeoutError, ValueError):
         print("Unable to complete the Vast.ai account check.", file=sys.stderr)
