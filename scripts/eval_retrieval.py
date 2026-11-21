@@ -23,7 +23,13 @@ def make_prompt(tokenizer, length, distance, seed, absent, background=None):
     expected = "ABSENT" if absent else str(values[0])
     records = list(zip(keys[1:], values[1:]))
     distractors = [f"Record REF-{key} has code {value}." for key, value in records]
-    needle = "" if absent else f"Record REF-{target} has code {values[0]}."
+    needle = f"Record REF-{target} has code {values[0]}."
+    if absent:
+        if background is None:
+            needle = ""
+        else:
+            decoy = rng.choice([key for key in range(prefix, prefix + 100) if key not in keys])
+            needle = f"Record REF-{decoy} has code {values[0]}."
     marker = "ARCHIVE_CONTENT_PLACEHOLDER"
     message = (
         f"Read the archive. Give only the five-digit code for the requested record "
@@ -48,7 +54,7 @@ def make_prompt(tokenizer, length, distance, seed, absent, background=None):
     if min(before, after) < sum(map(len, entries)):
         raise ValueError("Choose a distance that leaves room for distractors on both sides")
 
-    background_offset = seed % len(background) if background else 0
+    background_offset = random.Random(seed ^ 0x52414449).randrange(len(background)) if background else 0
 
     def filler_tokens(size):
         nonlocal background_offset
