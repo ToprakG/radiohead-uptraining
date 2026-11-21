@@ -40,7 +40,7 @@ def main():
         parser.error("Training corpus is shorter than one training example")
     model = AutoModelForCausalLM.from_pretrained(
         args.model, revision=args.revision, attn_implementation="eager",
-        torch_dtype=torch.float32 if args.device == "cpu" else torch.float16,
+        torch_dtype=torch.float32 if args.device == "cpu" else torch.bfloat16,
     ).to(args.device).train().requires_grad_(False)
     checkpoint = {"model": args.model, "revision": args.revision, "rank": args.rank}
     radio = None

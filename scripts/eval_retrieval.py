@@ -73,7 +73,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.revision)
     model = AutoModelForCausalLM.from_pretrained(
         args.model, revision=args.revision, attn_implementation="eager" if args.checkpoint else None,
-        torch_dtype=torch.float16 if args.device != "cpu" else torch.float32
+        torch_dtype=torch.bfloat16 if args.device != "cpu" else torch.float32
     ).to(args.device).eval()
     use_cache = True
     if args.checkpoint:

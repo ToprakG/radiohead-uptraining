@@ -40,7 +40,7 @@ def main():
     training, validation = blocks(args.text), blocks(args.validation)
     model = AutoModelForCausalLM.from_pretrained(
         args.model, revision=args.revision, attn_implementation="eager",
-        torch_dtype=torch.float32 if args.device == "cpu" else torch.float16,
+        torch_dtype=torch.float32 if args.device == "cpu" else torch.bfloat16,
     ).to(args.device).eval().requires_grad_(False)
     layer = model.model.layers[args.layer]
     teacher = layer.self_attn
@@ -59,7 +59,13 @@ def main():
         with torch.no_grad():
             model.model(block[None].to(args.device), use_cache=False)
         prediction, _ = student(captured["hidden"], attention_mask=captured["mask"])
-        return torch.nn.functional.mse_loss(prediction, captured["target"])
+        loss = torch.nn.functional.mse_loss(prediction, captured["target"])
+        if not torch.isfinite(loss):
+            raise RuntimeError(
+                f"Non-finite distillation loss. Teacher finite: {torch.isfinite(captured['target']).all().item()}, "
+                f"student finite: {torch.isfinite(prediction).all().item()}"
+            )
+        return loss
 
     def measure(label):
         with torch.no_grad():
