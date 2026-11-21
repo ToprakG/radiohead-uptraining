@@ -66,26 +66,33 @@ class RadioAttention(nn.Module):
         selectivity = self.log_selectivity.float().exp()[None, :, None, None]
         k = coupling[None, :, None, None]
         chunks, powers = [], []
+        # Future keys always have zero coupling. Exclude them before the solver
+        # so early chunks do not spend iterations scanning masked columns.
+        positions_on_host = cache_position.tolist()
+        key_count = key_order.numel()
         for start in range(0, length, self.query_chunk):
             rows = slice(start, start + self.query_chunk)
+            stop = max(1, min(key_count, 1 + max(positions_on_host[rows])))
+            values = v[:, :, :stop]
+            rotated_values = rotated_v[:, :, :stop]
             query = q[:, :, rows]
-            overlap = (query @ v.transpose(-1, -2)).square()
-            overlap = overlap + (query @ rotated_v.transpose(-1, -2)).square()
+            overlap = (query @ values.transpose(-1, -2)).square()
+            overlap = overlap + (query @ rotated_values.transpose(-1, -2)).square()
             gain2 = floor + (1 - floor) * overlap.clamp(1e-12, 1).pow(selectivity)
-            age = positions[:, rows, None] - key_positions[:, None, :]
+            age = positions[:, rows, None] - key_positions[:, None, :stop]
             detuning = dial[:, :, rows, None] - eps * age[:, None]
-            valid = cache_position[rows, None] >= key_order[None, :]
+            valid = cache_position[rows, None] >= key_order[None, :stop]
             if attention_mask is not None:
-                mask = attention_mask[:, :, rows, :key_order.numel()]
+                mask = attention_mask[:, :, rows, :stop]
                 valid = valid & (mask if mask.dtype == torch.bool else mask == 0)
             kg2 = k.square() * gain2 * valid
             detuning2 = detuning.square()
             width = self.solve_mu(kg2, detuning2, 1e-3 * coupling).unsqueeze(-1)
             denominator = width.square() + detuning2
             amplitude = k * gain2.sqrt() * valid / denominator
-            chunks.append((amplitude * width) @ v - (amplitude * detuning) @ rotated_v)
+            chunks.append((amplitude * width) @ values - (amplitude * detuning) @ rotated_values)
             if kwargs.get("output_attentions"):
-                powers.append(kg2 / denominator)
+                powers.append(F.pad(kg2 / denominator, (0, key_count - stop)))
         combined = torch.cat(chunks, dim=2) * self.log_gain.float().exp()[None, :, None, None]
         output = combined.transpose(1, 2).flatten(2).to(hidden_states.dtype)
         return self.o_proj(output), torch.cat(powers, dim=2) if powers else None
