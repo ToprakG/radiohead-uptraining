@@ -89,7 +89,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="Qwen/Qwen2.5-1.5B-Instruct")
     parser.add_argument("--revision", required=True, help="Model commit SHA")
-    parser.add_argument("--checkpoint", "--radio-checkpoint", dest="checkpoint", type=Path)
+    models = parser.add_mutually_exclusive_group()
+    models.add_argument("--checkpoint", "--radio-checkpoint", dest="checkpoint", type=Path)
+    models.add_argument("--raw-layer", type=int, help="Evaluate an initialized Radio Head replacement")
+    parser.add_argument("--raw-init-length", type=int, default=256)
+    parser.add_argument("--language", type=Path, help="Score held-out text loss instead of retrieval")
     parser.add_argument("--device", default="mps")
     parser.add_argument("--length", type=int, default=16384)
     parser.add_argument("--distances", type=int, nargs="+", default=[1024, 4096, 8192, 15360])
@@ -106,22 +110,38 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         args.model, revision=args.revision, torch_dtype=torch.bfloat16 if args.device != "cpu" else torch.float32
     ).to(args.device).eval()
-    if args.checkpoint:
+    if args.checkpoint or args.raw_layer is not None:
         root = Path(__file__).resolve().parents[1]
         sys.path[:0] = [str(root), str(root / "upstream/radiohead/code/lab")]
         from layers import solve_mu
         from radiohead.adaptation import restore_adapters
         from radiohead.attention import RadioAttention
 
-        checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
-        if (checkpoint["model"], checkpoint["revision"]) != (args.model, args.revision):
-            parser.error("Adaptation checkpoint must match the model and revision")
-        restore_adapters(model, checkpoint)
+        if args.checkpoint:
+            checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+            if (checkpoint["model"], checkpoint["revision"]) != (args.model, args.revision):
+                parser.error("Adaptation checkpoint must match the model and revision")
+            restore_adapters(model, checkpoint)
+        else:
+            checkpoint = {"layer": args.raw_layer, "training_length": args.raw_init_length}
         if "layer" in checkpoint:
             layer = model.model.layers[checkpoint["layer"]]
             radio = RadioAttention(layer.self_attn, solve_mu, training_length=checkpoint["training_length"])
-            radio.load_state_dict(checkpoint["state_dict"])
+            if "state_dict" in checkpoint:
+                radio.load_state_dict(checkpoint["state_dict"])
             layer.self_attn = radio.eval()
+    if args.language:
+        corpus = tokenizer.encode(args.language.read_text(encoding="utf-8"), add_special_tokens=False)
+        with torch.inference_mode():
+            for index in range(min(args.examples, len(corpus) // args.length)):
+                tokens = torch.tensor([corpus[index * args.length:(index + 1) * args.length]], device=args.device)
+                hidden = model.model(tokens[:, :-1], use_cache=False).last_hidden_state
+                count = min(128, hidden.shape[1])
+                logits = model.lm_head(hidden[:, -count:]).float()
+                loss = torch.nn.functional.cross_entropy(logits.flatten(0, 1), tokens[:, -count:].flatten())
+                print(json.dumps({"length": args.length, "window": index, "scored_tokens": count,
+                                  "nll": loss.item()}), flush=True)
+        return
     with torch.inference_mode():
         for distance in args.distances:
             for absent in (False, True):
@@ -142,6 +162,7 @@ def main():
                     print(json.dumps({
                         "model": args.model, "revision": args.revision, "seed": seed,
                         "checkpoint": str(args.checkpoint) if args.checkpoint else None,
+                        "raw_layer": args.raw_layer,
                         "length": len(ids), "distance": distance, "absent": absent,
                         "background": str(args.background) if args.background else None,
                         "expected": expected, "response": response, "prediction": prediction,
