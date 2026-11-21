@@ -71,3 +71,10 @@ text and synthetic retrieval examples.
 The current evaluator is a synthetic pilot. One prompt at a given distance
 checks execution. A claim about 90% needs the full held-out evaluation and
 uncertainty estimates.
+
+## Connect Vast.ai
+
+Copy `.env.example` to `.env` if needed, then fill in `VAST_API_KEY` with a
+key from [Vast.ai Manage Keys](https://console.vast.ai/manage-keys/). Run
+`python3 scripts/check_vast.py` to check access to the account endpoint.
+The check is read-only and prints only the result. Git ignores `.env`.
