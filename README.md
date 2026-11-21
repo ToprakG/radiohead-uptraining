@@ -51,3 +51,23 @@ teacher's attention output and records validation MSE before and after training.
 
 Pass `--radio-checkpoint runs/radio-layer14.pt` to the retrieval evaluator to
 test the transplant. The experimental hybrid currently runs with caching disabled.
+
+## Uptrain and evaluate matched models
+
+The pilot updates low-rank adapters in the last four MLP down-projections for
+both models, with additional receiver updates in the hybrid. The distilled
+Q/V/O weights are frozen during this phase. Both runs draw the same ordinary
+text and synthetic retrieval examples.
+
+```sh
+.venv/bin/python scripts/uptrain.py --text train.txt --output runs/softmax-adapted.pt
+.venv/bin/python scripts/uptrain.py --text train.txt --distilled runs/radio-layer14.pt \
+  --output runs/radio-adapted.pt
+.venv/bin/python scripts/eval_retrieval.py \
+  --revision 989aa7980e4cf806f80c7fef2b1adb7bc71aa306 \
+  --checkpoint runs/radio-adapted.pt > runs/radio-16k.jsonl
+```
+
+The current evaluator is a synthetic pilot. One prompt at a given distance
+checks execution. A claim about 90% needs the full held-out evaluation and
+uncertainty estimates.
