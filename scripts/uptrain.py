@@ -33,10 +33,14 @@ def main():
     parser.add_argument("--steps", type=int, default=100)
     parser.add_argument("--rank", type=int, default=8)
     parser.add_argument("--retrieval-every", type=int, default=10)
+    parser.add_argument("--absent-every", type=int,
+                        help="Frequency of absent cases among retrieval examples (default: 2, resume: 5)")
     parser.add_argument("--confusable-training", action="store_true",
                         help="Draw background from the training text and use similar record IDs")
     args = parser.parse_args()
-    if args.length < 1024 or min(args.rank, args.steps, args.retrieval_every) < 1:
+    if args.absent_every is None:
+        args.absent_every = 5 if args.resume else 2
+    if args.length < 1024 or min(args.rank, args.steps, args.retrieval_every, args.absent_every) < 1:
         parser.error("Requires length >= 1024 and positive rank, steps, and retrieval interval")
     torch.manual_seed(0)
     rng = random.Random(args.seed)
@@ -80,7 +84,7 @@ def main():
     for step in range(args.steps):
         if step % args.retrieval_every == 0:
             seed = rng.randrange(100_000, 2**31)
-            absent = (step // args.retrieval_every) % 2 == 0
+            absent = (step // args.retrieval_every) % args.absent_every == 0
             background = text if args.confusable_training else None
             distance = rng.randrange(args.length * 2 // 5, args.length * 3 // 5)
             prompt, answer = make_prompt(tokenizer, args.length, distance, seed, absent, background)
