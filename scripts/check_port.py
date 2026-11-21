@@ -44,5 +44,26 @@ def main():
     print("Upstream parity passed for outputs, attention power, and input gradients.")
 
 
+def check_qwen_cache():
+    from transformers import Qwen2Config, Qwen2ForCausalLM
+
+    config = Qwen2Config(
+        vocab_size=128, hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+        num_attention_heads=4, num_key_value_heads=2, max_position_embeddings=64,
+        use_sliding_window=False, pad_token_id=0, eos_token_id=127,
+    )
+    model = Qwen2ForCausalLM(config).eval()
+    layer = model.model.layers[0]
+    layer.self_attn = RadioAttention(layer.self_attn, solve_mu, training_length=16, query_chunk=5)
+    tokens = torch.randint(1, 127, (1, 16))
+    with torch.inference_mode():
+        full = model(tokens, use_cache=False).logits
+        prefill = model(tokens[:, :12], use_cache=True)
+        suffix = model(tokens[:, 12:], past_key_values=prefill.past_key_values, use_cache=True)
+        torch.testing.assert_close(suffix.logits, full[:, 12:])
+    print("Qwen grouped-query prefill and cached continuation passed.")
+
+
 if __name__ == "__main__":
     main()
+    check_qwen_cache()

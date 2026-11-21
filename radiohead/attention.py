@@ -11,6 +11,7 @@ class RadioAttention(nn.Module):
     def __init__(self, teacher, solve_mu, training_length=1024, query_chunk=128):
         super().__init__()
         self.q_proj, self.v_proj, self.o_proj = teacher.q_proj, teacher.v_proj, teacher.o_proj
+        self.layer_idx = getattr(teacher, "layer_idx", 0)
         self.head_dim = teacher.head_dim
         self.groups = teacher.num_key_value_groups
         self.heads = self.q_proj.out_features // self.head_dim
@@ -36,15 +37,27 @@ class RadioAttention(nn.Module):
 
     def forward(self, hidden_states, position_embeddings=None, attention_mask=None,
                 past_key_value=None, cache_position=None, **kwargs):
-        if past_key_value is not None:
-            raise ValueError("RadioAttention currently requires use_cache=False")
         length = hidden_states.shape[1]
+        device = hidden_states.device
+        if cache_position is None:
+            cache_position = torch.arange(length, device=device)
         positions = kwargs.get("position_ids")
         if positions is None:
-            positions = torch.arange(length, device=hidden_states.device)[None, :]
-        order = torch.arange(length, device=hidden_states.device)
+            positions = cache_position[None, :]
         q = self.project_unit(self.q_proj, hidden_states)
-        v = self.project_unit(self.v_proj, hidden_states).repeat_interleave(self.groups, dim=1)
+        v = self.project_unit(self.v_proj, hidden_states)
+        if past_key_value is not None:
+            from transformers.cache_utils import DynamicCache
+
+            if not isinstance(past_key_value, DynamicCache):
+                raise ValueError("RadioAttention supports the Qwen2 dynamic cache")
+            _, v = past_key_value.update(v, v, self.layer_idx)
+        key_order = torch.arange(v.shape[-2], device=device)
+        if past_key_value is None:
+            key_positions = positions
+        else:
+            key_positions = key_order[None, :] + (positions[:, :1] - cache_position[0])
+        v = v.repeat_interleave(self.groups, dim=1)
         rotated_v = torch.stack((-v[..., 1::2], v[..., 0::2]), dim=-1).flatten(-2)
         dial = self.dial(hidden_states.to(self.dial.weight.dtype)).float().transpose(1, 2)
         coupling = self.log_coupling.float().exp()
@@ -59,11 +72,11 @@ class RadioAttention(nn.Module):
             overlap = (query @ v.transpose(-1, -2)).square()
             overlap = overlap + (query @ rotated_v.transpose(-1, -2)).square()
             gain2 = floor + (1 - floor) * overlap.clamp(1e-12, 1).pow(selectivity)
-            age = positions[:, rows, None] - positions[:, None, :]
+            age = positions[:, rows, None] - key_positions[:, None, :]
             detuning = dial[:, :, rows, None] - eps * age[:, None]
-            valid = order[rows, None] >= order[None, :]
+            valid = cache_position[rows, None] >= key_order[None, :]
             if attention_mask is not None:
-                mask = attention_mask[:, :, rows, :length]
+                mask = attention_mask[:, :, rows, :key_order.numel()]
                 valid = valid & (mask if mask.dtype == torch.bool else mask == 0)
             kg2 = k.square() * gain2 * valid
             detuning2 = detuning.square()

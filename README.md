@@ -50,7 +50,7 @@ teacher's attention output and records validation MSE before and after training.
 ```
 
 Pass `--radio-checkpoint runs/radio-layer14.pt` to the retrieval evaluator to
-test the transplant. The experimental hybrid currently runs with caching disabled.
+test the transplant. The hybrid supports the pinned Qwen2 dynamic KV cache.
 
 ## Uptrain and evaluate matched models
 

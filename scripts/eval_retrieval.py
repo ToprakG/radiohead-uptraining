@@ -72,10 +72,8 @@ def main():
     args = parser.parse_args()
     tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.revision)
     model = AutoModelForCausalLM.from_pretrained(
-        args.model, revision=args.revision, attn_implementation="eager" if args.checkpoint else None,
-        torch_dtype=torch.bfloat16 if args.device != "cpu" else torch.float32
+        args.model, revision=args.revision, torch_dtype=torch.bfloat16 if args.device != "cpu" else torch.float32
     ).to(args.device).eval()
-    use_cache = True
     if args.checkpoint:
         root = Path(__file__).resolve().parents[1]
         sys.path[:0] = [str(root), str(root / "upstream/radiohead/code/lab")]
@@ -92,7 +90,6 @@ def main():
             radio = RadioAttention(layer.self_attn, solve_mu, training_length=checkpoint["training_length"])
             radio.load_state_dict(checkpoint["state_dict"])
             layer.self_attn = radio.eval()
-            use_cache = False
     with torch.inference_mode():
         for distance in args.distances:
             for absent in (False, True):
@@ -102,7 +99,7 @@ def main():
                     inputs = torch.tensor([ids], device=args.device)
                     output = model.generate(
                         inputs, attention_mask=torch.ones_like(inputs), do_sample=False,
-                        max_new_tokens=32, use_cache=use_cache, pad_token_id=tokenizer.eos_token_id,
+                        max_new_tokens=32, use_cache=True, pad_token_id=tokenizer.eos_token_id,
                     )
                     response = tokenizer.decode(output[0, len(ids):], skip_special_tokens=True).strip()
                     answers = set(re.findall(r"(?<!\d)\d{5}(?!\d)", response))
