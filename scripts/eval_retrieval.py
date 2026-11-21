@@ -99,6 +99,7 @@ def main():
     parser.add_argument("--distances", type=int, nargs="+", default=[1024, 4096, 8192, 15360])
     parser.add_argument("--examples", type=int, default=25, help="Examples per distance and condition")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--distance-seed-stride", type=int, default=0)
     parser.add_argument("--background", type=Path, help="Held-out UTF-8 text for confusable-key evaluation")
     args = parser.parse_args()
     tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.revision)
@@ -143,10 +144,10 @@ def main():
                                   "nll": loss.item()}), flush=True)
         return
     with torch.inference_mode():
-        for distance in args.distances:
+        for distance_index, distance in enumerate(args.distances):
             for absent in (False, True):
                 for index in range(args.examples):
-                    seed = args.seed + index
+                    seed = args.seed + index + distance_index * args.distance_seed_stride
                     ids, expected = make_prompt(tokenizer, args.length, distance, seed, absent, background)
                     inputs = torch.tensor([ids], device=args.device)
                     output = model.generate(
