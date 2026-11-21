@@ -92,6 +92,7 @@ def main():
     models = parser.add_mutually_exclusive_group()
     models.add_argument("--checkpoint", "--radio-checkpoint", dest="checkpoint", type=Path)
     models.add_argument("--raw-layer", type=int, help="Evaluate an initialized Radio Head replacement")
+    models.add_argument("--raw-full", action="store_true")
     parser.add_argument("--raw-init-length", type=int, default=256)
     parser.add_argument("--language", type=Path, help="Score held-out text loss instead of retrieval")
     parser.add_argument("--device", default="mps")
@@ -111,18 +112,26 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         args.model, revision=args.revision, torch_dtype=torch.bfloat16 if args.device != "cpu" else torch.float32
     ).to(args.device).eval()
-    if args.checkpoint or args.raw_layer is not None:
+    if args.checkpoint or args.raw_layer is not None or args.raw_full:
         root = Path(__file__).resolve().parents[1]
         sys.path[:0] = [str(root), str(root / "upstream/radiohead/code/lab")]
         from layers import solve_mu
         from radiohead.adaptation import restore_adapters
         from radiohead.attention import RadioAttention
+        from radiohead.conversion import convert_all, restore_full
 
         if args.checkpoint:
             checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
             if (checkpoint["model"], checkpoint["revision"]) != (args.model, args.revision):
                 parser.error("Adaptation checkpoint must match the model and revision")
-            restore_adapters(model, checkpoint)
+            if checkpoint.get("full_radio"):
+                restore_full(model, solve_mu, checkpoint)
+            else:
+                restore_adapters(model, checkpoint)
+        elif args.raw_full:
+            model.requires_grad_(False)
+            convert_all(model, solve_mu, rank=8)
+            checkpoint = {}
         else:
             checkpoint = {"layer": args.raw_layer, "training_length": args.raw_init_length}
         if "layer" in checkpoint:
@@ -164,6 +173,7 @@ def main():
                         "model": args.model, "revision": args.revision, "seed": seed,
                         "checkpoint": str(args.checkpoint) if args.checkpoint else None,
                         "raw_layer": args.raw_layer,
+                        "raw_full": args.raw_full,
                         "length": len(ids), "distance": distance, "absent": absent,
                         "background": str(args.background) if args.background else None,
                         "expected": expected, "response": response, "prediction": prediction,
