@@ -11,9 +11,13 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
-def make_prompt(tokenizer, length, distance, seed, absent):
+def make_prompt(tokenizer, length, distance, seed, absent, background=None):
     rng = random.Random(seed)
-    keys = rng.sample(range(1000, 9999), 16)
+    if background is None:
+        keys = rng.sample(range(1000, 9999), 16)
+    else:
+        prefix = rng.randrange(10, 100) * 100
+        keys = [prefix + suffix for suffix in rng.sample(range(100), 16)]
     values = rng.sample(range(10000, 99999), len(keys))
     target = keys[0]
     expected = "ABSENT" if absent else str(values[0])
@@ -44,14 +48,30 @@ def make_prompt(tokenizer, length, distance, seed, absent):
     if min(before, after) < sum(map(len, entries)):
         raise ValueError("Choose a distance that leaves room for distractors on both sides")
 
+    background_offset = seed % len(background) if background else 0
+
+    def filler_tokens(size):
+        nonlocal background_offset
+        if not background:
+            return (filler * (size // len(filler) + 1))[:size]
+        end = background_offset + size
+        if end <= len(background):
+            segment = background[background_offset:end]
+        else:
+            tail = background[background_offset:]
+            remaining = size - len(tail)
+            segment = tail + (background * (remaining // len(background) + 1))[:remaining]
+        background_offset = end % len(background)
+        return segment
+
     def haystack(size, records):
         tokens = []
         gap = (size - sum(map(len, records))) // (len(records) + 1)
         for record in records:
-            tokens.extend((filler * (gap // len(filler) + 1))[:gap])
+            tokens.extend(filler_tokens(gap))
             tokens.extend(record)
         tail = size - len(tokens)
-        tokens.extend((filler * (tail // len(filler) + 1))[:tail])
+        tokens.extend(filler_tokens(tail))
         return tokens
 
     ids = prefix_ids + haystack(before, entries[:7]) + needle_ids
@@ -69,8 +89,14 @@ def main():
     parser.add_argument("--distances", type=int, nargs="+", default=[1024, 4096, 8192, 15360])
     parser.add_argument("--examples", type=int, default=25, help="Examples per distance and condition")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--background", type=Path, help="Held-out UTF-8 text for confusable-key evaluation")
     args = parser.parse_args()
     tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.revision)
+    background = None
+    if args.background:
+        background = tokenizer.encode(args.background.read_text(encoding="utf-8"), add_special_tokens=False)
+        if len(background) < args.length:
+            parser.error("Background text must contain at least one context window")
     model = AutoModelForCausalLM.from_pretrained(
         args.model, revision=args.revision, torch_dtype=torch.bfloat16 if args.device != "cpu" else torch.float32
     ).to(args.device).eval()
@@ -95,7 +121,7 @@ def main():
             for absent in (False, True):
                 for index in range(args.examples):
                     seed = args.seed + index
-                    ids, expected = make_prompt(tokenizer, args.length, distance, seed, absent)
+                    ids, expected = make_prompt(tokenizer, args.length, distance, seed, absent, background)
                     inputs = torch.tensor([ids], device=args.device)
                     output = model.generate(
                         inputs, attention_mask=torch.ones_like(inputs), do_sample=False,
@@ -111,6 +137,7 @@ def main():
                         "model": args.model, "revision": args.revision, "seed": seed,
                         "checkpoint": str(args.checkpoint) if args.checkpoint else None,
                         "length": len(ids), "distance": distance, "absent": absent,
+                        "background": str(args.background) if args.background else None,
                         "expected": expected, "response": response, "prediction": prediction,
                         "correct": prediction == expected,
                     }), flush=True)
