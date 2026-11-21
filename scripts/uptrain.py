@@ -29,9 +29,12 @@ def main():
     parser.add_argument("--length", type=int, default=1024)
     parser.add_argument("--steps", type=int, default=100)
     parser.add_argument("--rank", type=int, default=8)
+    parser.add_argument("--retrieval-every", type=int, default=10)
+    parser.add_argument("--confusable-training", action="store_true",
+                        help="Draw background from the training text and use similar record IDs")
     args = parser.parse_args()
-    if args.length < 1024 or args.rank < 1 or args.steps < 1:
-        parser.error("Requires length >= 1024 and positive rank and steps")
+    if args.length < 1024 or min(args.rank, args.steps, args.retrieval_every) < 1:
+        parser.error("Requires length >= 1024 and positive rank, steps, and retrieval interval")
     torch.manual_seed(0)
     rng = random.Random(100_000)
     tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.revision)
@@ -60,9 +63,12 @@ def main():
     adapters = attach_adapters(model, args.rank, range(max(0, len(model.model.layers) - 4), len(model.model.layers)))
     optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=1e-4)
     for step in range(args.steps):
-        if step % 10 == 0:
+        if step % args.retrieval_every == 0:
             seed = rng.randrange(100_000, 2**31)
-            prompt, answer = make_prompt(tokenizer, args.length, args.length // 2, seed, step % 20 == 0)
+            absent = (step // args.retrieval_every) % 2 == 0
+            background = text if args.confusable_training else None
+            distance = rng.randrange(args.length * 2 // 5, args.length * 3 // 5)
+            prompt, answer = make_prompt(tokenizer, args.length, distance, seed, absent, background)
             tokens = prompt + tokenizer.encode(answer, add_special_tokens=False) + [tokenizer.eos_token_id]
             labels = [-100] * len(prompt) + tokens[len(prompt):]
         else:
