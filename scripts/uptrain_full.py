@@ -101,8 +101,20 @@ def main():
             torch.testing.assert_close(restored, uncached, atol=0.02, rtol=0.02)
             prefix = reloaded(ids[:, :-1], use_cache=True)
             decode = reloaded(ids[:, -1:], past_key_values=prefix.past_key_values, use_cache=True)
-            torch.testing.assert_close(decode.logits[:, -1].float(), restored, atol=0.16, rtol=0.03)
-        print("28-layer checkpoint reload and cached generation parity passed.", flush=True)
+            drift = (decode.logits[:, -1].float() - restored).abs()
+            print(json.dumps({"bf16_cache_max_logit_drift": drift.max().item(),
+                              "bf16_cache_mean_logit_drift": drift.mean().item(),
+                              "bf16_top_token_matches": bool(
+                                  decode.logits[:, -1].argmax(-1).eq(restored.argmax(-1)).all()
+                              )}), flush=True)
+            del student
+            reloaded.float()
+            dense_fp32 = reloaded(ids, use_cache=False).logits[:, -1]
+            prefix_fp32 = reloaded(ids[:, :-1], use_cache=True)
+            decode_fp32 = reloaded(ids[:, -1:], past_key_values=prefix_fp32.past_key_values,
+                                   use_cache=True).logits[:, -1]
+            torch.testing.assert_close(decode_fp32, dense_fp32, atol=0.007, rtol=0.005)
+        print("28-layer checkpoint reload and FP32 cached decoding parity passed.", flush=True)
 
 
 if __name__ == "__main__":
