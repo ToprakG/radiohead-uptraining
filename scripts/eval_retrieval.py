@@ -4,6 +4,8 @@ import argparse
 import json
 import random
 import re
+import sys
+from pathlib import Path
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -61,6 +63,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="Qwen/Qwen2.5-1.5B-Instruct")
     parser.add_argument("--revision", required=True, help="Model commit SHA")
+    parser.add_argument("--radio-checkpoint", type=Path)
     parser.add_argument("--device", default="mps")
     parser.add_argument("--length", type=int, default=16384)
     parser.add_argument("--distances", type=int, nargs="+", default=[1024, 4096, 8192, 15360])
@@ -71,6 +74,19 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         args.model, revision=args.revision, torch_dtype=torch.float16 if args.device != "cpu" else torch.float32
     ).to(args.device).eval()
+    if args.radio_checkpoint:
+        root = Path(__file__).resolve().parents[1]
+        sys.path[:0] = [str(root), str(root / "upstream/radiohead/code/lab")]
+        from layers import solve_mu
+        from radiohead.attention import RadioAttention
+
+        checkpoint = torch.load(args.radio_checkpoint, map_location="cpu", weights_only=True)
+        if (checkpoint["model"], checkpoint["revision"]) != (args.model, args.revision):
+            parser.error("Radio checkpoint must match the model and revision")
+        layer = model.model.layers[checkpoint["layer"]]
+        radio = RadioAttention(layer.self_attn, solve_mu, training_length=checkpoint["training_length"])
+        radio.load_state_dict(checkpoint["state_dict"])
+        layer.self_attn = radio.eval()
     with torch.inference_mode():
         for distance in args.distances:
             for absent in (False, True):
@@ -80,13 +96,14 @@ def main():
                     inputs = torch.tensor([ids], device=args.device)
                     output = model.generate(
                         inputs, attention_mask=torch.ones_like(inputs), do_sample=False,
-                        max_new_tokens=12, pad_token_id=tokenizer.eos_token_id,
+                        max_new_tokens=12, use_cache=args.radio_checkpoint is None, pad_token_id=tokenizer.eos_token_id,
                     )
                     response = tokenizer.decode(output[0, len(ids):], skip_special_tokens=True).strip()
                     match = re.fullmatch(r"(\d{5}|ABSENT)[.!]?", response, re.IGNORECASE)
                     prediction = match[1].upper() if match else None
                     print(json.dumps({
                         "model": args.model, "revision": args.revision, "seed": seed,
+                        "radio_checkpoint": str(args.radio_checkpoint) if args.radio_checkpoint else None,
                         "length": len(ids), "distance": distance, "absent": absent,
                         "expected": expected, "response": response, "prediction": prediction,
                         "correct": prediction == expected,

@@ -38,3 +38,16 @@ mkdir -p runs
 The initial evaluation uses 15 competing records and deterministic synthetic filler.
 Keep its prompt seeds out of adaptation and add varied held-out background text
 before drawing broader conclusions.
+
+## Distill one Radio Head layer
+
+Supply two separate UTF-8 text corpora. The pilot fits layer 14 to the frozen
+teacher's attention output and records validation MSE before and after training.
+
+```sh
+.venv/bin/python scripts/distill_layer.py --text train.txt --validation validation.txt \
+  --output runs/radio-layer14.pt
+```
+
+Pass `--radio-checkpoint runs/radio-layer14.pt` to the retrieval evaluator to
+test the transplant. The experimental hybrid currently runs with caching disabled.
