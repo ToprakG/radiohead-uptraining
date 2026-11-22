@@ -1,0 +1,6 @@
+{"length": 4096, "window": 0, "scored_tokens": 128, "nll": 11.518085479736328}
+{"length": 4096, "window": 1, "scored_tokens": 128, "nll": 11.513139724731445}
+{"length": 4096, "window": 2, "scored_tokens": 128, "nll": 11.26709270477295}
+{"length": 4096, "window": 3, "scored_tokens": 128, "nll": 11.305295944213867}
+{"length": 4096, "window": 4, "scored_tokens": 128, "nll": 11.868717193603516}
+{"length": 4096, "window": 5, "scored_tokens": 128, "nll": 11.207660675048828}
